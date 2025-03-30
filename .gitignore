@@ -1,0 +1,30 @@
+# Rust
+/rust_solver/target/
+*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
