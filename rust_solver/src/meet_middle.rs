@@ -23,188 +23,111 @@ pub fn find_subset_sum_meet_middle_raw(
     let found = Arc::new(Mutex::new(false));
     let found_for_closure = found.clone();
     
-    let n = numbers.len();
-    let mid = n / 2;
-    
-    // 计算前半部分所有可能的子集和
-    let mut first_half = Vec::with_capacity(1 << mid);
-    for mask in 0..(1 << mid) {
-        let mut sum = 0;
-        let mut indices = Vec::new();
-        for i in 0..mid {
-            if (mask & (1 << i)) != 0 {
-                sum += numbers[i];
-                indices.push(i);
-            }
-        }
-        first_half.push((sum, indices));
+    // 处理空数组的特殊情况
+    if numbers.is_empty() {
+        return Vec::new();
     }
     
-    // 排序以便二分查找
-    first_half.sort_by(|a, b| a.0.cmp(&b.0));
-    
-    // 并行计算后半部分
-    let second_half_len = n - mid;
-    let max_second_half = 1 << second_half_len;
-    
-    // 将后半部分分成多个块并行处理
-    let num_cpus = num_cpus::get() as u64;
-    let block_size = (max_second_half as u64 / num_cpus) + 1;
-    
-    (0..num_cpus).into_par_iter().for_each(|cpu_id| {
-        let start = cpu_id * block_size;
-        let end = std::cmp::min(start + block_size, max_second_half as u64);
+    // 处理单个元素的特殊情况
+    if numbers.len() == 1 {
+        // 当精度为0时，只有完全匹配才返回
+        let is_match = if precision == 0 {
+            numbers[0] == target
+        } else {
+            (numbers[0] - target).abs() <= precision
+        };
         
-        for mask in start..end {
-            // 如果只需要找到一个解且已经找到，则提前退出
-            if !find_all && *found_for_closure.lock().unwrap() {
-                break;
+        if is_match {
+            return vec![vec![0]];
+        } else {
+            return Vec::new();
+        }
+    }
+    
+    // 将数组分为两半
+    let mid = numbers.len() / 2;
+    let first_half = &numbers[..mid];
+    let second_half = &numbers[mid..];
+    
+    // 计算两半的所有可能的子集和
+    let mut first_half_sums = Vec::new();
+    let mut second_half_sums = Vec::new();
+    
+    // 计算第一半部分的所有子集和
+    for i in 0..(1 << first_half.len()) {
+        let mut sum = 0;
+        let mut indices = Vec::new();
+        for j in 0..first_half.len() {
+            if (i & (1 << j)) != 0 {
+                sum += first_half[j];
+                indices.push(j);
             }
-            
-            let mut sum = 0;
-            let mut indices = Vec::new();
-            for i in 0..second_half_len {
-                if (mask & (1 << i)) != 0 {
-                    sum += numbers[mid + i];
-                    indices.push(mid + i);
-                }
+        }
+        first_half_sums.push((sum, indices));
+    }
+    
+    // 计算第二半部分的所有子集和
+    for i in 0..(1 << second_half.len()) {
+        let mut sum = 0;
+        let mut indices = Vec::new();
+        for j in 0..second_half.len() {
+            if (i & (1 << j)) != 0 {
+                sum += second_half[j];
+                indices.push(j + mid);
             }
-            
-            // 计算需要在前半部分查找的目标值
-            let target_sum = target - sum;
-            let lower_bound = target_sum - precision;
-            let upper_bound = target_sum + precision;
-            
-            // 二分查找满足条件的前半部分
-            let start_pos = binary_search_lower_bound(&first_half, lower_bound);
-            
-            for i in start_pos..first_half.len() {
-                let (sum1, indices1) = &first_half[i];
+        }
+        second_half_sums.push((sum, indices));
+    }
+    
+    // 对第二半部分的和进行排序，便于二分查找
+    second_half_sums.sort_by_key(|&(sum, _)| sum);
+    
+    // 处理第一半部分的和，并在第二半部分中查找互补的和
+    first_half_sums.into_par_iter().for_each(|(sum, indices)| {
+        if *found_for_closure.lock().unwrap() && !find_all {
+            return;
+        }
+        
+        // 计算需要在前半部分查找的目标值
+        let target_sum = target - sum;
+        
+        // 定义查找条件
+        if precision == 0 {
+            // 精度为0时，使用精确匹配
+            let pos = binary_search_exact(&second_half_sums, target_sum);
+            if pos.is_some() {
+                let mut complete_solution = indices.clone();
+                complete_solution.extend(second_half_sums[pos.unwrap()].1.clone());
                 
-                if *sum1 > upper_bound {
-                    break;
-                }
-                
-                // 合并两个子集的索引
-                let mut combined_indices = indices1.clone();
-                combined_indices.extend_from_slice(&indices);
-                
-                // 添加到结果中
                 let mut results_guard = results_for_closure.lock().unwrap();
-                results_guard.push(combined_indices);
+                results_guard.push(complete_solution);
                 
                 if !find_all {
                     let mut found_guard = found_for_closure.lock().unwrap();
                     *found_guard = true;
-                    break;
                 }
             }
-        }
-    });
-    
-    // 返回结果 - 修改此部分以避免try_unwrap导致的线程恐慌
-    let final_results = {
-        let guard = results.lock().unwrap();
-        guard.clone()  // 直接克隆锁内的数据，而不是尝试unwrap Arc
-    };
-    
-    final_results
-}
-
-/*
-/// 使用Meet-in-the-Middle算法查找子集和
-/// 
-/// 适用于中等规模的数据集(25<n≤40)
-/// 时间复杂度: O(2^(n/2) * log(2^(n/2)))
-/// 
-/// # 参数
-/// * `numbers` - 整数数组
-/// * `target` - 目标和值
-/// * `precision` - 精度（绝对值）
-/// * `find_all` - 是否查找所有解
-pub fn find_subset_sum_meet_middle(
-    py: Python,
-    numbers: &[i64],
-    target: i64,
-    precision: i64,
-    find_all: bool,
-) -> Vec<Vec<usize>> {
-    let results = Arc::new(Mutex::new(Vec::new()));
-    let results_for_closure = results.clone();
-    let found = Arc::new(Mutex::new(false));
-    let found_for_closure = found.clone();
-    
-    py.allow_threads(move || {
-        let n = numbers.len();
-        let mid = n / 2;
-        
-        // 计算前半部分所有可能的子集和
-        let mut first_half = Vec::with_capacity(1 << mid);
-        for mask in 0..(1 << mid) {
-            let mut sum = 0;
-            let mut indices = Vec::new();
-            for i in 0..mid {
-                if (mask & (1 << i)) != 0 {
-                    sum += numbers[i];
-                    indices.push(i);
-                }
-            }
-            first_half.push((sum, indices));
-        }
-        
-        // 排序以便二分查找
-        first_half.sort_by(|a, b| a.0.cmp(&b.0));
-        
-        // 并行计算后半部分
-        let second_half_len = n - mid;
-        let max_second_half = 1 << second_half_len;
-        
-        // 将后半部分分成多个块并行处理
-        let num_cpus = num_cpus::get() as u64;
-        let block_size = (max_second_half as u64 / num_cpus) + 1;
-        
-        (0..num_cpus).into_par_iter().for_each(|cpu_id| {
-            let start = cpu_id * block_size;
-            let end = std::cmp::min(start + block_size, max_second_half as u64);
+        } else {
+            // 使用精度范围查找
+            let lower_bound = target_sum - precision;
+            let upper_bound = target_sum + precision;
             
-            for mask in start..end {
-                // 如果只需要找到一个解且已经找到，则提前退出
-                if !find_all && *found_for_closure.lock().unwrap() {
-                    break;
-                }
-                
-                let mut sum = 0;
-                let mut indices = Vec::new();
-                for i in 0..second_half_len {
-                    if (mask & (1 << i)) != 0 {
-                        sum += numbers[mid + i];
-                        indices.push(mid + i);
-                    }
-                }
-                
-                // 计算需要在前半部分查找的目标值
-                let target_sum = target - sum;
-                let lower_bound = target_sum - precision;
-                let upper_bound = target_sum + precision;
-                
-                // 二分查找满足条件的前半部分
-                let start_pos = binary_search_lower_bound(&first_half, lower_bound);
-                
-                for i in start_pos..first_half.len() {
-                    let (sum1, indices1) = &first_half[i];
-                    
-                    if *sum1 > upper_bound {
+            // 二分查找满足条件的前半部分
+            let start_pos = binary_search_lower_bound(&second_half_sums, lower_bound);
+            if start_pos < second_half_sums.len() {
+                for i in start_pos..second_half_sums.len() {
+                    if second_half_sums[i].0 > upper_bound {
                         break;
                     }
                     
-                    // 合并两个子集的索引
-                    let mut combined_indices = indices1.clone();
-                    combined_indices.extend_from_slice(&indices);
+                    // 找到一个解
+                    let mut complete_solution = indices.clone();
+                    complete_solution.extend(second_half_sums[i].1.clone());
                     
-                    // 添加到结果中
                     let mut results_guard = results_for_closure.lock().unwrap();
-                    results_guard.push(combined_indices);
+                    results_guard.push(complete_solution);
                     
+                    // 如果只需要一个解，设置标志并返回
                     if !find_all {
                         let mut found_guard = found_for_closure.lock().unwrap();
                         *found_guard = true;
@@ -212,18 +135,34 @@ pub fn find_subset_sum_meet_middle(
                     }
                 }
             }
-        });
+        }
     });
     
-    // 返回结果 - 修改此部分以避免try_unwrap导致的线程恐慌
+    // 返回结果
     let final_results = {
         let guard = results.lock().unwrap();
-        guard.clone()  // 直接克隆锁内的数据，而不是尝试unwrap Arc
+        guard.clone()
     };
     
     final_results
 }
-*/
+
+/// 二分查找一个精确值
+fn binary_search_exact(arr: &[(i64, Vec<usize>)], target: i64) -> Option<usize> {
+    let mut low = 0;
+    let mut high = arr.len();
+    
+    while low < high {
+        let mid = (low + high) / 2;
+        match arr[mid].0.cmp(&target) {
+            std::cmp::Ordering::Equal => return Some(mid),
+            std::cmp::Ordering::Less => low = mid + 1,
+            std::cmp::Ordering::Greater => high = mid,
+        }
+    }
+    
+    None
+}
 
 /// 二分查找下界
 fn binary_search_lower_bound(arr: &[(i64, Vec<usize>)], target: i64) -> usize {

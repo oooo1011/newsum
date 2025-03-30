@@ -162,7 +162,15 @@ fn serial_branch_and_bound(
     find_all: bool,
 ) {
     // 检查当前和是否满足要求
-    if (current_sum - target).abs() <= precision {
+    // 当精度为0时，要求完全匹配
+    if precision == 0 {
+        if current_sum == target {
+            results.push(current_path.clone());
+            if !find_all {
+                return;
+            }
+        }
+    } else if (current_sum - target).abs() <= precision {
         results.push(current_path.clone());
         if !find_all {
             return;
@@ -174,8 +182,13 @@ fn serial_branch_and_bound(
     let remaining_negative: i64 = numbers[start_depth..].iter().filter(|&&x| x < 0).sum();
     
     // 剪枝：如果当前和加上所有剩余正数仍小于目标值减精度，或者加上所有剩余负数仍大于目标值加精度，则剪枝
-    if current_sum + remaining_sum < target - precision || 
-       current_sum + remaining_negative > target + precision {
+    // 当精度为0时，使用精确匹配进行剪枝
+    if precision == 0 {
+        if current_sum + remaining_sum < target || current_sum + remaining_negative > target {
+            return;
+        }
+    } else if current_sum + remaining_sum < target - precision || 
+               current_sum + remaining_negative > target + precision {
         return;
     }
     

@@ -91,7 +91,7 @@ class FileHandler:
                 if decimal_places > 2:
                     raise ValueError(f"数据 {num} 超过两位小数")
     
-    def export_results(self, filename, numbers, indices, results):
+    def export_results(self, filename, numbers, indices, results, target=None):
         """
         导出结果到Excel文件
         
@@ -100,6 +100,7 @@ class FileHandler:
             numbers (list): 原始数字列表
             indices (list): 原始索引列表
             results (list): 计算结果，每个元素是一个包含选中索引的列表
+            target (float, optional): 目标和值，用于验证计算
         """
         # 创建数据框
         df = pd.DataFrame()
@@ -119,6 +120,26 @@ class FileHandler:
         
         # 添加是否被选中的列
         df['是否选中'] = df.iloc[:, 1:].any(axis=1).astype(int)
+        
+        # 计算和显示每个解的总和
+        if results:
+            # 添加总和行
+            sums_row = len(df)
+            df.loc[sums_row] = [None] * len(df.columns)
+            df.loc[sums_row, '数值'] = '总和'
+            
+            for i, result in enumerate(results):
+                column_name = f'解 {i+1}'
+                # 计算总和（使用完整精度）
+                result_sum = sum(numbers[indices.index(idx)] for idx in result)
+                # 显示在总和行
+                df.loc[sums_row, column_name] = result_sum
+                
+                # 如果提供了目标值，添加与目标的差值
+                if target is not None:
+                    diff = abs(result_sum - target)
+                    df.loc[sums_row+1, '数值'] = '与目标差值'
+                    df.loc[sums_row+1, column_name] = diff
         
         # 保存到Excel
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:

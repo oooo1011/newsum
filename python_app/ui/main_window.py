@@ -116,11 +116,16 @@ class Ui_MainWindow(object):
         font.setBold(True)
         self.btnCalculate.setFont(font)
         
+        # 暂停/恢复计算按钮
+        self.btnPause = QPushButton("暂停计算")
+        self.btnPause.setMinimumHeight(40)
+        
         # 停止计算按钮
         self.btnStop = QPushButton("停止计算")
         self.btnStop.setMinimumHeight(40)
         
         layout.addWidget(self.btnCalculate)
+        layout.addWidget(self.btnPause)
         layout.addWidget(self.btnStop)
         
         self.main_layout.addLayout(layout)

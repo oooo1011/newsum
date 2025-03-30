@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox, 
     QTableWidgetItem, QHeaderView, QProgressBar
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QMutex, QWaitCondition
 from PyQt6.QtGui import QColor
 
 # 导入UI和处理模块
@@ -67,6 +67,7 @@ class SubsetSumApp(QMainWindow):
         # 初始化按钮状态
         self.ui.btnCalculate.setEnabled(False)
         self.ui.btnStop.setEnabled(False)
+        self.ui.btnPause.setEnabled(False)  # 初始时暂停按钮禁用
         self.ui.btnExport.setEnabled(False)
         
         # 设置表格属性
@@ -81,6 +82,7 @@ class SubsetSumApp(QMainWindow):
         self.ui.btnBrowse.clicked.connect(self.browse_file)
         self.ui.btnCalculate.clicked.connect(self.start_calculation)
         self.ui.btnStop.clicked.connect(self.stop_calculation)
+        self.ui.btnPause.clicked.connect(self.toggle_pause_calculation)
         self.ui.btnExport.clicked.connect(self.export_results)
         
         # 算法选择变化时更新UI
@@ -154,6 +156,7 @@ class SubsetSumApp(QMainWindow):
             # 更新UI状态
             self.ui.btnCalculate.setEnabled(False)
             self.ui.btnStop.setEnabled(True)
+            self.ui.btnPause.setEnabled(True)  # 开始计算后启用暂停按钮
             self.ui.btnExport.setEnabled(False)
             self.ui.lblStatus.setText("计算中...")
             self.is_calculating = True
@@ -173,11 +176,24 @@ class SubsetSumApp(QMainWindow):
     def stop_calculation(self):
         """停止计算"""
         if self.calculation_thread and self.is_calculating:
-            self.calculation_thread.terminate()
+            self.calculation_thread.stop()
             self.is_calculating = False
             self.ui.btnCalculate.setEnabled(True)
             self.ui.btnStop.setEnabled(False)
+            self.ui.btnPause.setEnabled(False)  # 停止计算后禁用暂停按钮
             self.ui.lblStatus.setText("计算已停止")
+    
+    def toggle_pause_calculation(self):
+        """切换计算暂停状态"""
+        if self.calculation_thread and self.is_calculating:
+            if self.calculation_thread.is_paused():
+                self.calculation_thread.resume()
+                self.ui.btnPause.setText("暂停")
+                self.ui.lblStatus.setText("计算中...")
+            else:
+                self.calculation_thread.pause()
+                self.ui.btnPause.setText("继续")
+                self.ui.lblStatus.setText("计算已暂停")
     
     def handle_results(self, results):
         """处理计算结果"""
@@ -185,6 +201,7 @@ class SubsetSumApp(QMainWindow):
         self.is_calculating = False
         self.ui.btnCalculate.setEnabled(True)
         self.ui.btnStop.setEnabled(False)
+        self.ui.btnPause.setEnabled(False)  # 计算完成后禁用暂停按钮
         self.ui.btnExport.setEnabled(True)
         
         # 显示结果
@@ -202,6 +219,7 @@ class SubsetSumApp(QMainWindow):
         self.is_calculating = False
         self.ui.btnCalculate.setEnabled(True)
         self.ui.btnStop.setEnabled(False)
+        self.ui.btnPause.setEnabled(False)  # 出错后禁用暂停按钮
         self.ui.lblStatus.setText("计算出错")
         QMessageBox.critical(self, "错误", error_msg)
     
@@ -246,8 +264,11 @@ class SubsetSumApp(QMainWindow):
         
         if filename:
             try:
+                # 获取目标值
+                target = float(self.ui.txtTarget.text())
+                
                 self.file_handler.export_results(
-                    filename, self.numbers, self.indices, self.results
+                    filename, self.numbers, self.indices, self.results, target
                 )
                 QMessageBox.information(self, "成功", "结果已成功导出")
             except Exception as e:
@@ -267,14 +288,76 @@ class CalculationThread(QThread):
         self.precision = precision
         self.find_all = find_all
         self.algorithm = algorithm
+        # 添加停止和暂停标志
+        self._stop_requested = False
+        self._paused = False
+        self._pause_mutex = QMutex()
+        self._pause_condition = QWaitCondition()
+    
+    def stop(self):
+        """安全请求停止计算"""
+        self._stop_requested = True
+        # 恢复计算以便检查停止标志
+        self.resume()
+    
+    def pause(self):
+        """暂停计算"""
+        self._pause_mutex.lock()
+        self._paused = True
+        self._pause_mutex.unlock()
+    
+    def resume(self):
+        """恢复计算"""
+        self._pause_mutex.lock()
+        self._paused = False
+        self._pause_condition.wakeAll()
+        self._pause_mutex.unlock()
+    
+    def is_paused(self):
+        """检查是否暂停状态"""
+        self._pause_mutex.lock()
+        paused = self._paused
+        self._pause_mutex.unlock()
+        return paused
+    
+    def _check_pause_and_stop(self):
+        """检查是否需要暂停或停止
+        返回True表示请求停止，返回False表示可以继续执行
+        """
+        # 首先检查是否请求停止
+        if self._stop_requested:
+            return True
+        
+        # 然后检查是否需要暂停
+        self._pause_mutex.lock()
+        try:
+            if self._paused:
+                # 等待恢复信号
+                self._pause_condition.wait(self._pause_mutex)
+                # 再次检查是否在等待期间被请求停止
+                if self._stop_requested:
+                    return True
+        finally:
+            self._pause_mutex.unlock()
+        
+        return False
     
     def run(self):
         try:
+            # 检查是否在开始时就请求了停止
+            if self._check_pause_and_stop():
+                return
+            
             # 发送进度更新
             self.progress_update.emit(10)
             
             # 使用计算处理器进行实际计算
             calc_handler = CalculationHandler()
+            
+            # 在调用Rust计算前检查暂停/停止
+            if self._check_pause_and_stop():
+                return
+                
             results = calc_handler.calculate(
                 self.numbers, 
                 self.target, 
@@ -283,6 +366,10 @@ class CalculationThread(QThread):
                 self.algorithm
             )
             
+            # 计算完成后再次检查停止请求
+            if self._stop_requested:
+                return
+                
             self.progress_update.emit(100)
             self.result_ready.emit(results)
         except Exception as e:

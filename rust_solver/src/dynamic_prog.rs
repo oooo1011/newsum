@@ -17,64 +17,124 @@ pub fn find_subset_sum_dp_raw(
     precision: i64,
     find_all: bool,
 ) -> Vec<Vec<usize>> {
-    let results = Arc::new(Mutex::new(Vec::new()));
-    let results_for_closure = results.clone();
-    
     let n = numbers.len();
-    let target_range = target - precision..=target + precision;
+    let results = Arc::new(Mutex::new(Vec::new()));
     
-    // 计算正数和负数的和，确定DP表的范围
-    let positive_sum: i64 = numbers.iter().filter(|&&x| x > 0).sum();
-    let negative_sum: i64 = numbers.iter().filter(|&&x| x < 0).sum();
-    
-    // 计算DP表需要的范围
-    let min_sum = negative_sum;
-    let max_sum = positive_sum;
-    let offset = min_sum.abs();
-    let dp_size = (max_sum + offset + 1) as usize;
-    
-    // 创建DP表和路径跟踪
-    let mut dp = vec![false; dp_size];
-    let mut paths: Vec<Vec<Vec<usize>>> = vec![vec![]; dp_size];
-    
-    // 初始状态：空集和为0
-    dp[(0 + offset) as usize] = true;
-    paths[(0 + offset) as usize].push(vec![]);
+    // 创建DP表
+    let mut dp = vec![vec![false; (target as usize) + 1 + (precision as usize)]; n + 1];
+    dp[0][0] = true;
     
     // 填充DP表
-    for i in 0..n {
-        // 从后向前避免重复计算
-        for j in (min_sum..=max_sum).rev() {
-            let prev_idx = j - numbers[i];
+    for i in 1..=n {
+        dp[i][0] = true;
+        for j in 0..=target as usize + precision as usize {
+            // 不选当前元素
+            dp[i][j] = dp[i-1][j];
             
-            // 检查前一个状态是否可达且在范围内
-            if prev_idx >= min_sum && prev_idx <= max_sum && dp[(prev_idx + offset) as usize] {
-                dp[(j + offset) as usize] = true;
-                
-                // 只在需要所有解或当前和在目标范围内时构建路径
-                if find_all || target_range.contains(&j) {
-                    // 创建新的路径集合，避免可变和不可变引用冲突
-                    let mut new_paths = Vec::new();
-                    for prev_path in &paths[(prev_idx + offset) as usize] {
-                        let mut new_path = prev_path.clone();
-                        new_path.push(i);
-                        new_paths.push(new_path);
-                    }
-                    
-                    // 将新路径添加到当前和的路径集合中
-                    paths[(j + offset) as usize].extend(new_paths);
+            // 选当前元素
+            let val = numbers[i-1] as usize;
+            if j >= val {
+                dp[i][j] |= dp[i-1][j - val];
+            }
+        }
+    }
+    
+    // 查找符合目标和的解
+    let mut temp_path = vec![false; n];
+    
+    fn back_track(
+        i: usize, 
+        j: usize, 
+        path: &mut Vec<bool>, 
+        numbers: &[i64], 
+        dp: &Vec<Vec<bool>>, 
+        target: i64,
+        precision: i64,
+        results: &Arc<Mutex<Vec<Vec<usize>>>>,
+        find_all: bool
+    ) -> bool {
+        // 基本情况：到达第一行
+        if i == 0 {
+            // 检查是否找到解
+            let indices: Vec<usize> = path.iter()
+                .enumerate()
+                .filter(|(_, &included)| included)
+                .map(|(idx, _)| idx)
+                .collect();
+            
+            // 计算当前和
+            let sum: i64 = indices.iter()
+                .map(|&idx| numbers[idx])
+                .sum();
+            
+            // 检查是否满足目标和
+            let is_valid = if precision == 0 {
+                // 精度为0时要求完全匹配
+                sum == target
+            } else {
+                // 有精度时允许在范围内
+                (sum - target).abs() <= precision
+            };
+            
+            if is_valid {
+                let mut guard = results.lock().unwrap();
+                guard.push(indices);
+                return !find_all; // 如果find_all为false，返回true表示找到了解并停止
+            }
+            return false;
+        }
+        
+        // 不选当前元素的情况
+        if dp[i-1][j] {
+            path[i-1] = false;
+            if back_track(i-1, j, path, numbers, dp, target, precision, results, find_all) {
+                return true;
+            }
+        }
+        
+        // 选当前元素的情况
+        let val = numbers[i-1] as usize;
+        if j >= val && dp[i-1][j - val] {
+            path[i-1] = true;
+            if back_track(i-1, j - val, path, numbers, dp, target, precision, results, find_all) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    // 查找解集
+    let target_range: Vec<usize> = if precision == 0 {
+        // 精度为0时只查找精确匹配
+        vec![target as usize]
+    } else {
+        // 精度不为0时查找范围内的所有值
+        let lower_bound = (target - precision) as usize;
+        let upper_bound = (target + precision) as usize;
+        (lower_bound..=upper_bound)
+            .filter(|&j| j < dp[0].len())
+            .collect()
+    };
+    
+    for j in target_range {
+        if j < dp[0].len() && dp[n][j] {
+            back_track(n, j, &mut temp_path, numbers, &dp, target, precision, &results, find_all);
+            
+            // 如果不需要找到所有解且已经找到解，则退出
+            if !find_all {
+                let guard = results.lock().unwrap();
+                if !guard.is_empty() {
+                    break;
                 }
             }
         }
     }
     
-    // 收集目标范围内的所有结果
-    collect_results(dp, paths, target, precision, offset, min_sum, max_sum, find_all, results_for_closure);
-    
-    // 返回结果 - 修改此部分以避免try_unwrap导致的线程恐慌
+    // 返回结果
     let final_results = {
         let guard = results.lock().unwrap();
-        guard.clone()  // 直接克隆锁内的数据，而不是尝试unwrap Arc
+        guard.clone()
     };
     
     final_results

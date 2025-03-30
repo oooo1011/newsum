@@ -103,6 +103,44 @@ class TestAlgorithms(unittest.TestCase):
         self.assertAlmostEqual(subset_sum, target, delta=precision, 
                               msg=f"解 {results[0]} 的和 {subset_sum} 不在目标范围内")
     
+    def test_zero_precision_exact_match(self):
+        """测试精度为0时的精确匹配"""
+        # 使用整数数据，确保有精确的解
+        numbers = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+        target = 15.0  # 可以通过5+10或者1+4+10等组合精确得到
+        precision = 0  # 精度为0，要求完全匹配
+        find_all = True
+        
+        # 测试所有算法
+        for algorithm in ["bit_enum", "meet_middle", "dp", "branch_bound"]:
+            with self.subTest(algorithm=algorithm):
+                results = self.calc_handler.calculate(
+                    numbers, target, precision, find_all, algorithm=algorithm
+                )
+                
+                # 验证结果数量
+                self.assertGreater(len(results), 0, f"{algorithm}算法应该找到至少一个解")
+                
+                # 验证每个解的和是否精确等于目标值（不使用delta）
+                for indices in results:
+                    subset_sum = sum(numbers[i] for i in indices)
+                    self.assertEqual(subset_sum, target, 
+                                    msg=f"{algorithm}算法: 解 {indices} 的和 {subset_sum} 不等于目标值 {target}")
+        
+        # 测试一个不可能有精确解的情况
+        numbers = [1.0, 2.0, 3.0, 4.0, 5.0]
+        target = 8.5  # 无法用给定的整数精确组合得到
+        
+        for algorithm in ["bit_enum", "meet_middle", "dp", "branch_bound"]:
+            with self.subTest(algorithm=algorithm):
+                results = self.calc_handler.calculate(
+                    numbers, target, precision, find_all, algorithm=algorithm
+                )
+                
+                # 验证没有找到结果
+                self.assertEqual(len(results), 0, 
+                                f"{algorithm}算法: 对于无精确解的情况应返回空列表，而不是近似解")
+    
     def test_decimal_precision(self):
         """测试小数精度处理"""
         # 使用固定的数据集而不是随机数据

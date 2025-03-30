@@ -54,7 +54,13 @@ pub fn find_subset_sum_bit_enum_raw(
             }
             
             // 检查是否满足目标和（考虑精度）
-            if (subset_sum - target).abs() <= precision {
+            let is_match = if precision == 0 {
+                subset_sum == target
+            } else {
+                (subset_sum - target).abs() <= precision
+            };
+
+            if is_match {
                 let mut results_guard = results_for_closure.lock().unwrap();
                 results_guard.push(indices);
                 

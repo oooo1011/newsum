@@ -96,14 +96,14 @@ class CalculationHandler:
         """
         计算满足子集和条件的所有可能组合
         
-        参数:
+        参数：
             numbers: 数字列表
             target: 目标和
             precision: 精度（允许的误差范围）
             find_all: 是否查找所有解
             algorithm: 使用的算法，可选值：auto, bit_enum, meet_middle, dp, branch_bound
             
-        返回:
+        返回：
             满足条件的索引列表的列表
         """
         start_time = time.time()
@@ -133,6 +133,25 @@ class CalculationHandler:
     def _rust_calculate(self, numbers: List[float], target: float, precision: float, 
                        find_all: bool, algorithm: str) -> List[List[int]]:
         """使用Rust实现的子集和算法"""
+        # 精度为0时的特殊处理 - 使用整数乘法提高精度
+        scale_factor = 1
+        if precision == 0:
+            # 确定所有数字的最大小数位数
+            max_decimal_places = 0
+            for num in numbers:
+                str_num = str(float(num))
+                if '.' in str_num:
+                    decimal_places = len(str_num.split('.')[1].rstrip('0'))
+                    max_decimal_places = max(max_decimal_places, decimal_places)
+                    
+            # 放大倍数 = 10^最大小数位数
+            if max_decimal_places > 0:
+                scale_factor = 10 ** max_decimal_places
+                numbers = [num * scale_factor for num in numbers]
+                target = target * scale_factor
+                precision = 0  # 保持精度为0
+                logger.info("精度为0，使用整数乘法提高精度，放大倍数: %d", scale_factor)
+        
         # 转换Python数据类型为C数据类型
         numbers_array = self.ffi.new("double[]", numbers)
         numbers_len = len(numbers)
@@ -147,6 +166,16 @@ class CalculationHandler:
         result_rows_ptr = self.ffi.new("unsigned int*")
         result_cols_ptr_ptr = self.ffi.new("unsigned int**")
         
+        # 使用信号量实现暂停检查
+        # 由于我们无法直接修改Rust代码来支持暂停
+        # 添加一个非阻塞的轮询检查点来检查主线程是否设置了暂停或停止标志
+        # 这里假设线程拥有检查暂停的方法
+        from PyQt6.QtCore import QThread
+        thread = QThread.currentThread()
+        if hasattr(thread, '_check_pause_and_stop'):
+            if thread._check_pause_and_stop():
+                return []  # 如果检测到停止请求，返回空结果
+                
         # 调用Rust函数
         find_all_int = 1 if find_all else 0
         ret = self.rust_lib.rust_find_subset_sum(
